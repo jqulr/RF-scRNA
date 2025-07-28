@@ -36,10 +36,36 @@ def redundancy(X: np.ndarray, idx_selected: List[int], idx_remain: int, n_bins: 
 
 
 # run mRMR to selects genes with minimum redundancy and maximum relevance
-# 
-def run_mrmr():
-    # TODO
-    pass
+# return a list of indices for selected genes
+def run_mrmr(X, y, features_to_select=10):
+
+    n_features = X.shape[1]
+    selected_feat = []
+
+    cand_features = []
+    for i in range(n_features):
+        cand_features.append(i)
+
+    relevance = mutual_info(X, y)
+
+    for i in features_to_select:
+        best_score = -np.inf
+        best_feat = None
+
+        for cand in range(cand_features):
+            if cand in selected_feat:
+                continue
+            redundancy_score = redundancy(X, selected_feat, cand_features)
+            curr_score = relevance[i] - redundancy_score
+
+            if curr_score > best_score:
+                best_score = curr_score
+                best_feat = cand
+
+        selected_feat.append(best_feat)
+        cand_features.remove(cand)
+           
+    return selected_feat
 
 
 # def mrmr(X, y, k=10):
