@@ -20,19 +20,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Random Forest on scRNA-seq with GridSearchCV")
     parser.add_argument("--series_mtx", required=True, help="Path to series matrix with cell type labels")
     parser.add_argument("--exp_mtx", required=True, help="Path to gene expression matrix")
+    parser.add_argument("--output", required=True, help="Output file path to save best parameters")
 
-    return parser.parse_args()
-
-# runs basic RF 
-def run_RF(exp_mtx, series_matrix):
-    adata = make_adata(exp_mtx, series_matrix)
-    X_tr, x_ts, Y_tr, y_ts = split_and_normalize(adata)
-
-    print("starting training RF")
-    train_RF(X_tr, x_ts, Y_tr, y_ts)
-
-
-    
+    return parser.parse_args()  
 
 # Extracts a label vector of length n_samples from a series matrix, and the length of the label vector
 def extract_labels(file_path):
@@ -88,47 +78,68 @@ def make_adata(exp_mtx, file_path):
 
     return adata
 
-# split by 20/80
-def split_and_normalize(adata, label_key="cell_type", test_size=0.2, random_state=42):
-    
+# filters out sampels with gene count < 3 and normalizes data
+def preprocess(adata, label_key="cell_type"):
+
     ad = adata.copy()
-
-    # filter out data without less than 3 cells
     sc.pp.filter_genes(ad, min_cells=3)
-
-    # normalize
     sc.pp.normalize_total(ad)
     sc.pp.log1p(ad)
 
-    # extract feature matrix and label vector
-    X = ad.X
-    y = ad.obs[label_key].values
+    return ad.X, ad.obs[label_key].values
 
-    # split 20/80
-    X_train, X_test, y_train, y_test = train_test_split(
-      X, y,
-      test_size=test_size,
-      stratify=y,
-      random_state=random_state
+# Find optimal RF hyperparameters by performing grid search cross-validation
+def optimize_RF(X, y, random_state=42):
+
+    rf = RandomForestClassifier(n_jobs=5, n_estimators=100)
+
+    params_grid = {
+        "n_estimators":[100, 200, 300],
+        "max_depth":[100],
+        "min_samples_leaf":[1,2,3]
+    }
+
+    skf = StratifiedKFold(
+        n_splits=5,
+        shuffle=True,
+        random_state=random_state
+    )
+    
+    grid = GridSearchCV(
+        rf, param_grid=params_grid, cv=skf, scoring="accuracy", n_jobs=-1, verbose=1, refit=True
     )
 
-    return X_train, X_test, y_train, y_test
+    grid.fit(X, y)
+    return grid.best_estimator_,grid.best_params_
 
+# Final training and evaluation of model with selected parameters
+def evaluate_model(model, X_train, X_test, y_train, y_test):
 
-# basic training of RF
-def train_RF(X_train, x_test, y_train, y_test, n_jobs=5, n_estimators=100):
-    sel = RandomForestClassifier(n_jobs=5, n_estimators=100)
-    sel.fit(X_train, y_train)
+    model.fit(X_train, X_test)
+    y_pred = model.predict(X_test)
 
-    # evaluation on test set
-    y_pred = sel.predict(x_test)
     print(classification_report(y_test, y_pred, digits=4))
-    
-      
-    
+
+ 
 def main():
     args = parse_args()
-    run_RF(args.exp_mtx, args.series_mtx)
+    adata = make_adata(args.exp_mtx, args.series_mtx)
+    X, y = preprocess(adata)
+
+    X_train, X_test, y_train, y_test = train_test_split(
+        X, y, test_size=0.2, stratify=y, random_state=42
+    )
+
+    print("Optimizing hyperparameters...")
+    best_model, best_params = optimize_RF(X_train, y_train)
+
+    print(f"Saving the best parameters into {args.output}")
+    print(f"\nBest Parameters: {best_params}")
+    with open(args.output, "w") as out:
+        out.write(str(best_params) + "\n")
+
+    print("Final training and evaluation using the testing data")
+    evaluate_model(best_model, X_test, y_test)
 
     
 if __name__ == "__main__":
